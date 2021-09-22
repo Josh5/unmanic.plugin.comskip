@@ -1,0 +1,3 @@
+[submodule "comchap"]
+	path = comchap
+	url = https://github.com/BrettSheleski/comchap.git

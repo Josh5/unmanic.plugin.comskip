@@ -25,8 +25,10 @@
 import logging
 import mimetypes
 import os
+from configparser import NoSectionError, NoOptionError
 
 from unmanic.libs.unplugins.settings import PluginSettings
+from unmanic.libs.directoryinfo import UnmanicDirectoryInfo
 
 # Configure plugin logger
 logger = logging.getLogger("Unmanic.Plugin.comskip")
@@ -34,14 +36,38 @@ logger = logging.getLogger("Unmanic.Plugin.comskip")
 
 class Settings(PluginSettings):
     settings = {
-        'config': '',
+        'config':         '',
+        'enable_comchap': False,
+        'enable_comcut':  False,
     }
     form_settings = {
-        "config": {
-            "label":      "Comskip configuration",
-            "input_type": "textarea",
-        },
     }
+
+    def __init__(self):
+        self.form_settings = {
+            "config":         {
+                "label":      "Comskip configuration",
+                "input_type": "textarea",
+            },
+            "enable_comchap": self.__set_enable_comchap_form_settings(),
+            "enable_comcut":  self.__set_enable_comcut_form_settings(),
+        }
+
+    def __set_enable_comchap_form_settings(self):
+        values = {
+            "label": "Generate chapter information in file metadata (Comchap)",
+        }
+        if self.get_setting('enable_comcut'):
+            values["display"] = 'hidden'
+        return values
+
+    def __set_enable_comcut_form_settings(self):
+        values = {
+            "label": "Remove detected commercials from file (Comcut)",
+        }
+        if self.get_setting('enable_comchap'):
+            values["display"] = 'hidden'
+        return values
 
 
 def test_valid_mimetype(file_path):
@@ -72,6 +98,104 @@ def test_valid_mimetype(file_path):
     return True
 
 
+def file_already_processed(path):
+    directory_info = UnmanicDirectoryInfo(os.path.dirname(path))
+
+    try:
+        processed = directory_info.get('comskip', os.path.basename(path))
+    except NoSectionError as e:
+        processed = ''
+    except NoOptionError as e:
+        processed = ''
+    except Exception as e:
+        logger.debug("Unknown exception {}.".format(e))
+        processed = ''
+
+    # Check for txt file with the same name as the video file
+    file_dirname = os.path.dirname(path)
+    file_sans_ext = os.path.splitext(os.path.basename(path))[0]
+    comskip_file_out = "{}.txt".format(file_sans_ext)
+    comskip_edl_file_out = "{}.edl".format(file_sans_ext)
+
+    if processed in ['comchap', 'comcut']:
+        logger.debug("File was previously processed with {}.".format(processed))
+        # This stream already has been processed
+        return True
+    elif os.path.exists(os.path.join(file_dirname, comskip_file_out)):
+        logger.debug("File has previously processed with comskip to make an .txt file")
+        # This stream already has been processed
+        return True
+    elif os.path.exists(os.path.join(file_dirname, comskip_edl_file_out)):
+        logger.debug("File has previously processed with comskip to make an .edl file")
+        # This stream already has been processed
+        return True
+
+    # Default to...
+    return False
+
+
+def comskip_config_file():
+    # Set config file path
+    settings = Settings()
+    profile_directory = settings.get_profile_directory()
+
+    # Set the output file
+    config = settings.get_setting('config')
+    if not config:
+        logger.error("Plugin not configured.")
+
+    # Write comskip settings file
+    comskip_config_file = os.path.join(profile_directory, 'comskip.ini')
+    with open(comskip_config_file, "w") as f:
+        f.write(config)
+        # Ensure the end of the file has a linebreak
+        f.write("\n\n")
+
+    return comskip_config_file
+
+
+def build_comskip_args(abspath):
+    config_file = comskip_config_file()
+    file_dirname = os.path.dirname(abspath)
+    file_sans_ext = os.path.splitext(os.path.basename(abspath))[0]
+    return [
+        'comskip',
+        '--ini={}'.format(config_file),
+        '--output={}'.format(file_dirname),
+        '--output-filename={}'.format(file_sans_ext),
+        abspath
+    ]
+
+
+def build_comchap_args(abspath, file_out):
+    comchap_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'comchap', 'comchap'))
+    config_file = comskip_config_file()
+    args = [
+        comchap_path,
+        '--comskip-ini={}'.format(config_file),
+        '--keep-edl',
+        '--keep-meta',
+        '--verbose',
+        abspath,
+        file_out,
+    ]
+    return args
+
+
+def build_comcut_args(abspath, file_out):
+    comcut_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'comchap', 'comcut'))
+    config_file = comskip_config_file()
+    args = [
+        comcut_path,
+        '--comskip-ini={}'.format(config_file),
+        '--keep-edl',
+        '--keep-meta',
+        abspath,
+        file_out,
+    ]
+    return args
+
+
 def on_library_management_file_test(data):
     """
     Runner function - enables additional actions during the library management file tests.
@@ -92,14 +216,10 @@ def on_library_management_file_test(data):
     if not test_valid_mimetype(abspath):
         return data
 
-    # Check for txt file with the same name as the video file
-    split_file_out = os.path.splitext(abspath)
-    comskip_file_out = "{}.txt".format(split_file_out[0])
-
-    if not os.path.exists(os.path.join(comskip_file_out)):
+    if not file_already_processed(abspath):
         # Mark this file to be added to the pending tasks
         data['add_file_to_pending_tasks'] = True
-        logger.debug("No comskip configuration found for file '{}'. It should be added to task list.".format(abspath))
+        logger.debug("File has not been processed previously '{}'. It should be added to task list.".format(abspath))
 
     return data
 
@@ -131,41 +251,59 @@ def on_worker_process(data):
     if not test_valid_mimetype(abspath):
         return data
 
-    # Check for txt file with the same name as the video file
-    file_dirname = os.path.dirname(abspath)
-    file_sans_ext = os.path.splitext(os.path.basename(abspath))[0]
-    comskip_file_out = "{}.txt".format(file_sans_ext)
-
-    if not os.path.exists(os.path.join(file_dirname, comskip_file_out)):
+    if not file_already_processed(abspath):
         # Mark this file to be added to the pending tasks
         data['add_file_to_pending_tasks'] = True
 
-        # Set config file path
+        # Check what we are running...
         settings = Settings()
-        profile_directory = settings.get_profile_directory()
+        if settings.get_setting('enable_comchap'):
+            # Build args
+            args = build_comchap_args(abspath, data.get('file_out'))
+        elif settings.get_setting('enable_comcut'):
+            # Build args
+            args = build_comcut_args(abspath, data.get('file_out'))
+        else:
+            # Build args
+            # This will create the file in the source file directory
+            args = build_comskip_args(abspath)
 
-        # Set the output file
-        config = settings.get_setting('config')
-        if not config:
-            logger.error("Plugin not configured.")
+        # Generate command
+        data['exec_command'] = args
 
-        # Write comskip settings file
-        config_file = os.path.join(profile_directory, 'comskip.ini')
-        with open(config_file, "w") as f:
-            f.write(config)
-            # Ensure the end of the file has a linebreak
-            f.write("\n\n")
+    return data
 
-            # The file_in needs to be the file_out
-        data['file_out'] = abspath
 
-        # Generate comskip command
-        data['exec_command'] = [
-            'comskip',
-            '--ini={}'.format(config_file),
-            '--output={}'.format(file_dirname),
-            '--output-filename={}'.format(file_sans_ext),
-            abspath
-        ]
+def on_postprocessor_task_results(data):
+    """
+    Runner function - provides a means for additional postprocessor functions based on the task success.
+
+    The 'data' object argument includes:
+        task_processing_success         - Boolean, did all task processes complete successfully.
+        file_move_processes_success     - Boolean, did all postprocessor movement tasks complete successfully.
+        destination_files               - List containing all file paths created by postprocessor file movements.
+        source_data                     - Dictionary containing data pertaining to the original source file.
+
+    :param data:
+    :return:
+
+    """
+    # We only care that the task completed successfully.
+    # If a worker processing task was unsuccessful, dont mark the file as being processed
+    if not data.get('task_processing_success'):
+        return data
+
+    # Loop over the destination_files list and update the directory info file for each one
+    settings = Settings()
+    for destination_file in data.get('destination_files'):
+        directory_info = UnmanicDirectoryInfo(os.path.dirname(destination_file))
+        if settings.get_setting('enable_comchap'):
+            directory_info.set('comskip', os.path.basename(destination_file), 'comchap')
+        elif settings.get_setting('enable_comcut'):
+            directory_info.set('comskip', os.path.basename(destination_file), 'comcut')
+        else:
+            directory_info.set('comskip', os.path.basename(destination_file), 'comskip')
+        directory_info.save()
+        logger.debug("Comskip info written for '{}'.".format(destination_file))
 
     return data
