@@ -21,10 +21,11 @@
         If not, see <https://www.gnu.org/licenses/>.
 
 """
-
+import hashlib
 import logging
 import mimetypes
 import os
+import stat
 from configparser import NoSectionError, NoOptionError
 
 from unmanic.libs.unplugins.settings import PluginSettings
@@ -36,22 +37,34 @@ logger = logging.getLogger("Unmanic.Plugin.comskip")
 
 class Settings(PluginSettings):
     settings = {
-        'config':         '',
-        'enable_comchap': False,
-        'enable_comcut':  False,
-    }
-    form_settings = {
+        'limit_to_extensions': False,
+        "allowed_extensions":  'ts',
+        'config':              '',
+        'enable_comchap':      False,
+        'enable_comcut':       False,
     }
 
     def __init__(self):
         self.form_settings = {
-            "config":         {
+            "limit_to_extensions": {
+                "label": "Only run Plugin on files with specified extensions",
+            },
+            "allowed_extensions":  self.__set_allowed_extensions_form_settings(),
+            "config":              {
                 "label":      "Comskip configuration",
                 "input_type": "textarea",
             },
-            "enable_comchap": self.__set_enable_comchap_form_settings(),
-            "enable_comcut":  self.__set_enable_comcut_form_settings(),
+            "enable_comchap":      self.__set_enable_comchap_form_settings(),
+            "enable_comcut":       self.__set_enable_comcut_form_settings(),
         }
+
+    def __set_allowed_extensions_form_settings(self):
+        values = {
+            "label": "Comma separated list of file extensions to process.",
+        }
+        if not self.get_setting('limit_to_extensions'):
+            values["display"] = 'hidden'
+        return values
 
     def __set_enable_comchap_form_settings(self):
         values = {
@@ -68,6 +81,31 @@ class Settings(PluginSettings):
         if self.get_setting('enable_comchap'):
             values["display"] = 'hidden'
         return values
+
+
+def file_ends_in_allowed_extensions(path, allowed_extensions):
+    """
+    Check if the file is in the allowed search extensions
+
+    :return:
+    """
+    # Get the file extension
+    file_extension = os.path.splitext(path)[-1][1:]
+
+    # Ensure the file's extension is lowercase
+    file_extension = file_extension.lower()
+
+    # If the config is empty (not yet configured) ignore everything
+    if not allowed_extensions:
+        logger.debug("Plugin has not yet been configured with a list of file extensions to allow. Blocking everything.")
+        return False
+
+    # Check if it ends with one of the allowed search extensions
+    if file_extension in allowed_extensions:
+        return True
+
+    logger.debug("File '{}' does not end in the specified file extensions '{}'.".format(path, allowed_extensions))
+    return False
 
 
 def test_valid_mimetype(file_path):
@@ -168,8 +206,11 @@ def build_comskip_args(abspath):
 
 
 def build_comchap_args(abspath, file_out):
-    comchap_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'comchap', 'comchap'))
     config_file = comskip_config_file()
+    comchap_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'comchap', 'comchap'))
+    # Ensure comchap is executable
+    st = os.stat(comchap_path)
+    os.chmod(comchap_path, st.st_mode | stat.S_IEXEC)
     args = [
         comchap_path,
         '--comskip-ini={}'.format(config_file),
@@ -183,8 +224,11 @@ def build_comchap_args(abspath, file_out):
 
 
 def build_comcut_args(abspath, file_out):
-    comcut_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'comchap', 'comcut'))
     config_file = comskip_config_file()
+    comcut_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'comchap', 'comcut'))
+    # Ensure comcut is executable
+    st = os.stat(comcut_path)
+    os.chmod(comcut_path, st.st_mode | stat.S_IEXEC)
     args = [
         comcut_path,
         '--comskip-ini={}'.format(config_file),
@@ -215,6 +259,13 @@ def on_library_management_file_test(data):
     # Ensure this is a video file
     if not test_valid_mimetype(abspath):
         return data
+
+    # Limit to configured file extensions
+    settings = Settings()
+    if settings.get_setting('limit_to_extensions'):
+        allowed_extensions = settings.get_setting('allowed_extensions')
+        if not file_ends_in_allowed_extensions(abspath, allowed_extensions):
+            return data
 
     if not file_already_processed(abspath):
         # Mark this file to be added to the pending tasks
@@ -251,10 +302,14 @@ def on_worker_process(data):
     if not test_valid_mimetype(abspath):
         return data
 
-    if not file_already_processed(abspath):
-        # Mark this file to be added to the pending tasks
-        data['add_file_to_pending_tasks'] = True
+    # Limit to configured file extensions
+    settings = Settings()
+    if settings.get_setting('limit_to_extensions'):
+        allowed_extensions = settings.get_setting('allowed_extensions')
+        if not file_ends_in_allowed_extensions(abspath, allowed_extensions):
+            return data
 
+    if not file_already_processed(abspath):
         # Check what we are running...
         settings = Settings()
         if settings.get_setting('enable_comchap'):
@@ -270,6 +325,14 @@ def on_worker_process(data):
 
         # Generate command
         data['exec_command'] = args
+
+        # Mark file as being processed for post-processor
+        original_source_path = data.get('original_file_path', '_')
+        src_file_hash = hashlib.md5(original_source_path.encode('utf8')).hexdigest()
+        profile_directory = settings.get_profile_directory()
+        plugin_file_lockfile = os.path.join(profile_directory, '{}.lock'.format(src_file_hash))
+        with open(plugin_file_lockfile, 'w') as f:
+            pass
 
     return data
 
@@ -292,6 +355,16 @@ def on_postprocessor_task_results(data):
     # If a worker processing task was unsuccessful, dont mark the file as being processed
     if not data.get('task_processing_success'):
         return data
+
+    # Was the processed file one of the ones we worked on...
+    settings = Settings()
+    original_source_path = data.get('source_data', {}).get('abspath', '_')
+    src_file_hash = hashlib.md5(original_source_path.encode('utf8')).hexdigest()
+    profile_directory = settings.get_profile_directory()
+    plugin_file_lockfile = os.path.join(profile_directory, '{}.lock'.format(src_file_hash))
+    if not os.path.exists(plugin_file_lockfile):
+        return data
+    os.remove(plugin_file_lockfile)
 
     # Loop over the destination_files list and update the directory info file for each one
     settings = Settings()

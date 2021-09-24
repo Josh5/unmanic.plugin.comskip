@@ -24,9 +24,11 @@ For installation into the Unmanic Docker container, create a startup file inside
 <span style="color:green">/config/startup.sh</span>
 ```
 if ! command -v comskip &> /dev/null; then
-    echo "**** Installing comskip ****"
+    echo "**** Installing Comskip ****"
     apt-get update
     apt-get install -y comskip
+else
+    echo "**** Comskip already installed ****"
 fi
 ```
 
