@@ -35,6 +35,15 @@ fi
 
 ### Config description:
 
+#### <span style="color:blue">Only run when the original source file matches specified extensions</span>
+When selected, you may specify a list of file extensions that this plugin will be limited to processing.
+
+This list is matched against the original source file. Not the current cached file.
+For this reason you can remux the original file to another container prior to processing.
+
+Eg: If you limit to `ts` files only and then, in your Plugin flow prior to this Plugin running, another Plugin remuxes
+the file `.ts` -> `.mkv`, this Plugin will still process the `.mkv` file.
+
 #### <span style="color:blue">Comskip configuration</span>
 Add your comskip.ini configuration here.
 

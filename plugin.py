@@ -47,7 +47,7 @@ class Settings(PluginSettings):
     def __init__(self):
         self.form_settings = {
             "limit_to_extensions": {
-                "label": "Only run Plugin on files with specified extensions",
+                "label": "Only run when the original source file matches specified extensions",
             },
             "allowed_extensions":  self.__set_allowed_extensions_form_settings(),
             "config":              {
@@ -60,7 +60,7 @@ class Settings(PluginSettings):
 
     def __set_allowed_extensions_form_settings(self):
         values = {
-            "label": "Comma separated list of file extensions to process.",
+            "label": "Comma separated list of file extensions",
         }
         if not self.get_setting('limit_to_extensions'):
             values["display"] = 'hidden'
@@ -70,7 +70,9 @@ class Settings(PluginSettings):
         values = {
             "label": "Generate chapter information in file metadata (Comchap)",
         }
-        if self.get_setting('enable_comcut'):
+        # Comchap always takes priority over Comcut if they are somehow accidentally both selected
+        # This prevents both settings from being hidden if something goes wrong.
+        if self.get_setting('enable_comcut') and not self.get_setting('enable_comchap'):
             values["display"] = 'hidden'
         return values
 
@@ -303,10 +305,11 @@ def on_worker_process(data):
         return data
 
     # Limit to configured file extensions
+    # Unlike other plugins, this is checked against the original file path, not what is currently cached
     settings = Settings()
     if settings.get_setting('limit_to_extensions'):
         allowed_extensions = settings.get_setting('allowed_extensions')
-        if not file_ends_in_allowed_extensions(abspath, allowed_extensions):
+        if not file_ends_in_allowed_extensions(data.get('original_file_path'), allowed_extensions):
             return data
 
     if not file_already_processed(abspath):

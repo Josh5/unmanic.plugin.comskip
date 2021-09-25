@@ -1,4 +1,7 @@
 
+**<span style="color:#56adda">0.0.4</span>**
+- Match file extension against the source file, not the current cached file.
+
 **<span style="color:#56adda">0.0.3</span>**
 - Ensure comchap and comcut scripts are executable
 - Add option to limit files based on extension
