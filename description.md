@@ -5,38 +5,27 @@ For configuration options:
 
 ---
 
-<div style="background-color:#eee;border-radius:4px;border-left:solid 5px #ccc;padding:10px;">
-<b>Note:</b>
-<br>It is recommended to have this as the very last plugin in your <b>Worker - Processing file</b></b> flow.
+<div style="background-color:#cfd;border-radius:4px;border-left:solid 5px #2b4;padding:10px;">
+<b>Tip:</b>
+<br>It is recommended to have this as the very last Plugin in your <b>Worker - Processing file</b></b> flow.
 </div>
 
 ### Overview
 
 If **Generate chapter information in file metadata** and **Remove detected commercials from file** are unselected in this Plugin's settings,
-this plugin will generate a comskip file according to your configuration in the same directory as the source file.
+this Plugin will generate a comskip file according to your configuration in the same directory as the source file.
 
 The name of the generated files will be the same as the video but with a different file extension such as **.edl** or **.txt** (depending on your configuration).
 
-The plugin does not install the required comskip dependencies. Ensure you have done this prior to running.
+This Plugin will auto-install the required dependencies on container startup. Note that this may cause a slower-than-normal startup of the container the first time and every time it is updated thereafter.
 
-For installation into the Unmanic Docker container, create a startup file inside the container:
-
-<span style="color:green">/config/startup.sh</span>
-```
-if ! command -v comskip &> /dev/null; then
-    echo "**** Installing Comskip ****"
-    apt-get update
-    apt-get install -y comskip
-else
-    echo "**** Comskip already installed ****"
-fi
-```
+The Plugin does not install the required comskip dependencies on any other system. Ensure you have done this prior to running.
 
 
 ### Config description:
 
 #### <span style="color:blue">Only run when the original source file matches specified extensions</span>
-When selected, you may specify a list of file extensions that this plugin will be limited to processing.
+When selected, you may specify a list of file extensions that this Plugin will be limited to processing.
 
 This list is matched against the original source file. Not the current cached file.
 For this reason you can remux the original file to another container prior to processing.
